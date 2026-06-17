@@ -607,6 +607,26 @@ object ZStreamSpec extends ZIOBaseSpec {
               _  <- latch.await
               l2 <- ref.get
             } yield assert(l1.toList)(equalTo((1 to 2).toList)) && assert(l2.reverse)(equalTo((1 to 4).toList))
+          },
+          test("does not evaluate more than one element ahead with buffer one") {
+            for {
+              evaluated <- Ref.make(Vector.empty[Int])
+              next      <- Ref.make(0)
+              held      <- Promise.make[Nothing, Unit]
+              first     <- Promise.make[Nothing, Unit]
+              stream = ZStream
+                         .repeatZIO(next.updateAndGet(_ + 1).tap(n => evaluated.update(_ :+ n)))
+                         .take(3)
+                         .buffer(1)
+              fiber                <- stream.runForeach(_ => first.succeed(()) *> held.await).fork
+              _                    <- first.await
+              _                    <- ZIO.yieldNow.repeatN(10)
+              whileConsumerBlocked <- evaluated.get
+              _                    <- held.succeed(())
+              _                    <- fiber.join
+              afterCompletion      <- evaluated.get
+            } yield assert(whileConsumerBlocked)(equalTo(Vector(1, 2))) &&
+              assert(afterCompletion)(equalTo(Vector(1, 2, 3)))
           }
         ),
         suite("bufferChunks")(
